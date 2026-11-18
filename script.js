@@ -15,7 +15,7 @@ let messages = [
   {
     role: "system",
     content:
-      "You are a helpful L'Oréal skincare and beauty advisor. Answer only questions about the generated routine or related topics such as skincare, haircare, makeup, fragrance, and beauty products. Base routine recommendations on the selected products and their descriptions. Use current web search information when it would help answer questions about L'Oréal products, ingredients, availability, routines, or recent recommendations. Include relevant source links or citations in your response. Remember to provide concise, clear, and accurate advice. Avoid making up information or providing medical advice. If a question is outside your expertise, politely decline to answer. Only answer questions that are relevant to the selected products and their use in a beauty routine. Do not answer questions about unrelated topics or products not selected. If a question is unclear, ask for clarification.",
+      "You are a L'Oréal beauty advisor. You may create, change, or explain beauty routines using L'Oréal skincare, haircare, makeup, or fragrance products. You may also answer follow-up questions about the user's current routine and selected products. Requests to generate a new routine are allowed whenever the user provides L'Oréal products, even if they are different from products used in a previous routine. Base routine advice primarily on the selected products. Use current web information only when helpful and include authoritative source links or citations. Keep responses concise, clear, and accurate. Do not fabricate information or give medical advice. Do not answer unrelated questions outside L'Oréal beauty and skincare topics.",
   },
 ];
 
@@ -334,10 +334,41 @@ async function sendToWorker() {
   }
 
   const data = await response.json();
-  if (!data.choices || !data.choices[0]) {
+
+  // The Responses API provides the completed text in data.output_text.
+  // If output_text is missing, look through the output items instead.
+  let reply = "";
+
+  if (typeof data.output_text === "string") {
+    reply = data.output_text;
+  } else if (Array.isArray(data.output)) {
+    data.output.forEach((item) => {
+      if (item.type === "message" && Array.isArray(item.content)) {
+        item.content.forEach((part) => {
+          if (part.type === "output_text" && typeof part.text === "string") {
+            reply += part.text;
+          }
+        });
+      }
+    });
+  }
+
+  // Keep support for a worker that still returns Chat Completions data.
+  if (
+    reply === "" &&
+    data.choices &&
+    data.choices[0] &&
+    data.choices[0].message &&
+    typeof data.choices[0].message.content === "string"
+  ) {
+    reply = data.choices[0].message.content;
+  }
+
+  if (reply === "") {
     throw new Error("The AI returned an unexpected response.");
   }
-  return data.choices[0].message.content;
+
+  return reply;
 }
 
 /* Generate a routine using only the user's selected product data */
@@ -363,11 +394,15 @@ generateRoutineButton.addEventListener("click", async () => {
   }));
 
   const prompt =
-    "Create a personalized beauty routine using only these selected L'Oréal products. " +
+    "This is a request to create a new personalized beauty routine. " +
+    "Use the new set of selected L'Oréal products below, not any previous routine or previous product selection. " +
     "Organize the steps by order of use, explain briefly why each step is useful, " +
     "and include a short tip for safe use. Use current web information when helpful and include links or citations to authoritative sources. Selected products: " +
     JSON.stringify(productData);
 
+  // Reset the conversation before a new routine so old products do not limit
+  // the new routine. The first message keeps the L'Oréal advisor instructions.
+  messages = [messages[0]];
   messages.push({ role: "user", content: prompt });
 
   try {
